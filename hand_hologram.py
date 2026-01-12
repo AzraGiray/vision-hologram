@@ -5,17 +5,54 @@ import sys
 import numpy as np
 import math
 
-# -------------------- PYGAME SETUP --------------------
+# ==================== 3D CUBE DRAW ====================
+GREEN_FRONT = (0, 220, 120)
+GREEN_TOP   = (60, 255, 170)
+GREEN_SIDE  = (0, 160, 90)
+WHITE = (255, 255, 255)
+
+def draw_3d_cube(surface, center, size, depth, filled=True):
+    cx, cy = center
+    d = int(depth)
+
+    front = pygame.Rect(
+        cx - size // 2,
+        cy - size // 2,
+        size,
+        size
+    )
+
+    top_face = [
+        (front.left, front.top),
+        (front.right, front.top),
+        (front.right - d, front.top - d),
+        (front.left - d, front.top - d)
+    ]
+
+    side_face = [
+        (front.right, front.top),
+        (front.right, front.bottom),
+        (front.right - d, front.bottom - d),
+        (front.right - d, front.top - d)
+    ]
+
+    if filled:
+        pygame.draw.polygon(surface, GREEN_TOP, top_face)
+        pygame.draw.polygon(surface, GREEN_SIDE, side_face)
+        pygame.draw.rect(surface, GREEN_FRONT, front)
+    else:
+        pygame.draw.polygon(surface, GREEN_TOP, top_face, 2)
+        pygame.draw.polygon(surface, GREEN_SIDE, side_face, 2)
+        pygame.draw.rect(surface, GREEN_FRONT, front, 2)
+
+# ==================== PYGAME ====================
 pygame.init()
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Thought → Hologram Demo")
 clock = pygame.time.Clock()
 
-RED = (220, 50, 50)
-WHITE = (255, 255, 255)
-
-# -------------------- MEDIAPIPE SETUP --------------------
+# ==================== MEDIAPIPE ====================
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
@@ -25,17 +62,17 @@ hands = mp_hands.Hands(
 
 cap = cv2.VideoCapture(0)
 
-# -------------------- STATE --------------------
+# ==================== STATE ====================
 cube_size = 80
-rotation_angle = 0
+depth = 20
 
-active_pos = [560, 300]     # sağ el ile taşınan küp
+active_pos = [560, 300]     # sol el ile taşınan küp
 fixed_cubes = []            # sabitlenen küpler
 
-is_left_fist = False
-prev_left_fist = False
+is_right_fist = False
+prev_right_fist = False
 
-# -------------------- MAIN LOOP --------------------
+# ==================== MAIN LOOP ====================
 while True:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -51,12 +88,10 @@ while True:
     frame = cv2.resize(frame, (WIDTH, HEIGHT))
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # frame başı reset
-    is_left_fist = False
+    is_right_fist = False
 
     result = hands.process(rgb)
 
-    # -------------------- HAND PROCESSING --------------------
     if result.multi_hand_landmarks and result.multi_handedness:
         for hand_landmarks, hand_info in zip(
             result.multi_hand_landmarks,
@@ -68,56 +103,63 @@ while True:
             x = int(index_tip.x * WIDTH)
             y = int(index_tip.y * HEIGHT)
 
-            # -------- RIGHT HAND → MOVE --------
-            if label == "RIGHT":
-                active_pos[0] = x
-                active_pos[1] = y
-
-            # -------- LEFT HAND → FIST (DROP) --------
+            # LEFT HAND → MOVE + DEPTH
             if label == "LEFT":
+                active_pos[:] = [x, y]
+
+                thumb_tip = hand_landmarks.landmark[4]
+                pinch_distance = math.hypot(
+                    (thumb_tip.x - index_tip.x) * WIDTH,
+                    (thumb_tip.y - index_tip.y) * HEIGHT
+                )
+                depth = max(10, min(40, int(pinch_distance / 8)))
+
+            # RIGHT HAND → DROP
+            if label == "RIGHT":
                 index_mcp = hand_landmarks.landmark[5]
                 fist_distance = math.hypot(
                     index_tip.x - index_mcp.x,
                     index_tip.y - index_mcp.y
                 )
-                is_left_fist = fist_distance < 0.05
+                is_right_fist = fist_distance < 0.05
 
-    # -------------------- DROP EDGE DETECTION --------------------
-    just_dropped = is_left_fist and not prev_left_fist
-    prev_left_fist = is_left_fist
+    just_dropped = is_right_fist and not prev_right_fist
+    prev_right_fist = is_right_fist
 
     if just_dropped:
         fixed_cubes.append({
             "pos": tuple(active_pos),
             "size": cube_size,
-            "angle": rotation_angle
+            "depth": depth
         })
         print(f"Cube dropped. Total fixed cubes: {len(fixed_cubes)}")
 
-    # -------------------- DRAW CAMERA --------------------
-    cam_surface = pygame.surfarray.make_surface(np.rot90(rgb))
+    # ==================== DRAW ====================
+    cam_surface = pygame.surfarray.make_surface(rgb.swapaxes(0, 1))
     screen.blit(cam_surface, (0, 0))
 
-    # -------------------- DRAW FIXED CUBES --------------------
+    # fixed cubes
     for cube in fixed_cubes:
-        surface = pygame.Surface((cube["size"], cube["size"]), pygame.SRCALPHA)
-        surface.fill(RED)
-        rotated = pygame.transform.rotate(surface, cube["angle"])
-        rect = rotated.get_rect(center=cube["pos"])
-        screen.blit(rotated, rect)
+        draw_3d_cube(
+            screen,
+            center=cube["pos"],
+            size=cube["size"],
+            depth=cube["depth"],
+            filled=True
+        )
 
-    # -------------------- DRAW ACTIVE CUBE --------------------
-    cube_surface = pygame.Surface((cube_size, cube_size), pygame.SRCALPHA)
-    cube_surface.fill(RED)
-    rotated_cube = pygame.transform.rotate(cube_surface, rotation_angle)
-    rect = rotated_cube.get_rect(center=active_pos)
-    screen.blit(rotated_cube, rect)
+    # active cube
+    draw_3d_cube(
+        screen,
+        center=active_pos,
+        size=cube_size,
+        depth=depth,
+        filled=False
+    )
 
-    # -------------------- DEBUG TEXT --------------------
-    font = pygame.font.SysFont(None, 36)
-    status = "LEFT FIST" if is_left_fist else "LEFT OPEN"
-    text_surface = font.render(status, True, WHITE)
-    screen.blit(text_surface, (20, 20))
+    font = pygame.font.SysFont(None, 32)
+    status = "RIGHT FIST" if is_right_fist else "RIGHT OPEN"
+    screen.blit(font.render(status, True, WHITE), (20, 20))
 
     pygame.display.flip()
     clock.tick(30)
