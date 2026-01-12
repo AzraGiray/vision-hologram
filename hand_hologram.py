@@ -26,6 +26,7 @@ hands = mp_hands.Hands(
 cap = cv2.VideoCapture(0)
 sphere_radius = 40
 cube_size = 80
+rotation_angle = 0
 
 
 # -------------------- MAIN LOOP --------------------
@@ -62,7 +63,17 @@ while True:
         sphere_radius = max(20, min(100, scale))
         cube_size = max(40, min(160, scale))
 
-    
+        index_mcp = hand_landmarks.landmark[5]
+        index_tip = hand_landmarks.landmark[8]
+
+        x1, y1 = int(index_mcp.x * WIDTH), int(index_mcp.y * HEIGHT)
+        x2, y2 = int(index_tip.x * WIDTH), int(index_tip.y * HEIGHT)
+
+        dx = x2 - x1
+        dy = y1 - y2  # ekran koordinatı ters olduğu için
+
+        rotation_angle = math.degrees(math.atan2(dy, dx))
+
     detected_hands = []
 
 
@@ -80,11 +91,12 @@ while True:
 
     # -------------------- DRAW HOLOGRAM --------------------
     if "LEFT" in detected_hands:
-        pygame.draw.rect(
-        screen,
-        RED,
-        (520, 300 - cube_size // 2, cube_size, cube_size)
-)
+        cube_surface = pygame.Surface((cube_size, cube_size), pygame.SRCALPHA)
+        cube_surface.fill(RED)
+        rotated_cube = pygame.transform.rotate(cube_surface, rotation_angle)
+        rect = rotated_cube.get_rect(center=(560, 300))
+        screen.blit(rotated_cube, rect)
+
 
 
     if "RIGHT" in detected_hands:
