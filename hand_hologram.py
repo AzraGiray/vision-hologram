@@ -19,21 +19,21 @@ WHITE = (255, 255, 255)
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=1,
+    max_num_hands=2,
     min_detection_confidence=0.7
 )
 
 cap = cv2.VideoCapture(0)
 
-# -------------------- STATE VARIABLES --------------------
+# -------------------- STATE --------------------
 cube_size = 80
 rotation_angle = 0
 
-is_fist = False
-prev_is_fist = False
-fixed_cubes = []
-cube_locked_this_fist = False
+active_pos = [560, 300]     # sağ el ile taşınan küp
+fixed_cubes = []            # sabitlenen küpler
 
+is_left_fist = False
+prev_left_fist = False
 
 # -------------------- MAIN LOOP --------------------
 while True:
@@ -51,89 +51,72 @@ while True:
     frame = cv2.resize(frame, (WIDTH, HEIGHT))
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # reset each frame
-    is_fist = False
+    # frame başı reset
+    is_left_fist = False
 
     result = hands.process(rgb)
 
-    if result.multi_hand_landmarks:
-        hand_landmarks = result.multi_hand_landmarks[0]
+    # -------------------- HAND PROCESSING --------------------
+    if result.multi_hand_landmarks and result.multi_handedness:
+        for hand_landmarks, hand_info in zip(
+            result.multi_hand_landmarks,
+            result.multi_handedness
+        ):
+            label = hand_info.classification[0].label.upper()
+            index_tip = hand_landmarks.landmark[8]
 
-        # ---------- LANDMARKS ----------
-        thumb_tip = hand_landmarks.landmark[4]
-        index_tip = hand_landmarks.landmark[8]
-        index_mcp = hand_landmarks.landmark[5]
+            x = int(index_tip.x * WIDTH)
+            y = int(index_tip.y * HEIGHT)
 
-        # ---------- SCALE (PINCH) ----------
-        pinch_distance = math.hypot(
-            (thumb_tip.x - index_tip.x) * WIDTH,
-            (thumb_tip.y - index_tip.y) * HEIGHT
-        )
+            # -------- RIGHT HAND → MOVE --------
+            if label == "RIGHT":
+                active_pos[0] = x
+                active_pos[1] = y
 
-        scale = int(pinch_distance / 4)
-        cube_size = max(40, min(160, scale))
+            # -------- LEFT HAND → FIST (DROP) --------
+            if label == "LEFT":
+                index_mcp = hand_landmarks.landmark[5]
+                fist_distance = math.hypot(
+                    index_tip.x - index_mcp.x,
+                    index_tip.y - index_mcp.y
+                )
+                is_left_fist = fist_distance < 0.05
 
-        # ---------- ROTATE ----------
-        x1, y1 = int(index_mcp.x * WIDTH), int(index_mcp.y * HEIGHT)
-        x2, y2 = int(index_tip.x * WIDTH), int(index_tip.y * HEIGHT)
+    # -------------------- DROP EDGE DETECTION --------------------
+    just_dropped = is_left_fist and not prev_left_fist
+    prev_left_fist = is_left_fist
 
-        dx = x2 - x1
-        dy = y1 - y2  # screen coord fix
-
-        rotation_angle = math.degrees(math.atan2(dy, dx))
-
-        # ---------- FIST DETECTION ----------
-        fist_distance = math.hypot(
-            index_tip.x - index_mcp.x,
-            index_tip.y - index_mcp.y
-        )
-
-        is_fist = fist_distance < 0.05
-
-    # ---------- EDGE DETECTION (GLOBAL) ----------
-    just_closed = is_fist and not prev_is_fist
-    prev_is_fist = is_fist
-    
-    if not is_fist:
-        cube_locked_this_fist = False
-
-    if just_closed and not cube_locked_this_fist:
+    if just_dropped:
         fixed_cubes.append({
-            "pos": (560, 300),
+            "pos": tuple(active_pos),
             "size": cube_size,
             "angle": rotation_angle
         })
-        cube_locked_this_fist = True
-        print(f"Cube locked. Total fixed cubes: {len(fixed_cubes)}")
-
- 
-
+        print(f"Cube dropped. Total fixed cubes: {len(fixed_cubes)}")
 
     # -------------------- DRAW CAMERA --------------------
     cam_surface = pygame.surfarray.make_surface(np.rot90(rgb))
     screen.blit(cam_surface, (0, 0))
-    
+
+    # -------------------- DRAW FIXED CUBES --------------------
     for cube in fixed_cubes:
         surface = pygame.Surface((cube["size"], cube["size"]), pygame.SRCALPHA)
         surface.fill(RED)
-
         rotated = pygame.transform.rotate(surface, cube["angle"])
         rect = rotated.get_rect(center=cube["pos"])
         screen.blit(rotated, rect)
 
-
     # -------------------- DRAW ACTIVE CUBE --------------------
     cube_surface = pygame.Surface((cube_size, cube_size), pygame.SRCALPHA)
     cube_surface.fill(RED)
-
     rotated_cube = pygame.transform.rotate(cube_surface, rotation_angle)
-    rect = rotated_cube.get_rect(center=(560, 300))
+    rect = rotated_cube.get_rect(center=active_pos)
     screen.blit(rotated_cube, rect)
 
     # -------------------- DEBUG TEXT --------------------
     font = pygame.font.SysFont(None, 36)
-    status_text = "FIST" if is_fist else "OPEN"
-    text_surface = font.render(status_text, True, WHITE)
+    status = "LEFT FIST" if is_left_fist else "LEFT OPEN"
+    text_surface = font.render(status, True, WHITE)
     screen.blit(text_surface, (20, 20))
 
     pygame.display.flip()
